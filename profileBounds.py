@@ -8,11 +8,9 @@ from astropy.time import Time
 
 
 
-h5File = '/Users/kaycd1/GAMERA/GAMERA_ACE_time_profiles/ACE.sc.h5'
-
 
 class ACEobsH5:
-    "Container for ACE results from a h5 file"
+    "Container for GAMERA results at ACE from a h5 file"
     def __init__(self, fileIn):
             self.MJD    = None
             self.dts    = None
@@ -32,6 +30,7 @@ class ACEobsH5:
             self.Temp   = None
             self.beta   = None
             
+            # First derivatives
             self.ddt_dts = None
             self.ddt_B   = None
             self.ddt_v   = None
@@ -77,7 +76,6 @@ class ACEobsH5:
                 self.Pb = (self.B * 1e-5)**2 / 2
                 #self.Beta = self.n * 1.38e-16 * self.Temp * 2 / (self.B * 1e-5)**2
                 self.Beta = self.Pt *1e-8 / self.Pb
-                
                 # Calc ram pressure
                 self.Pram = 0.5*(self.v * 1e5)**2 * self.n
                 
@@ -109,37 +107,117 @@ class ACEobsH5:
         self.ndCombo = np.abs(self.ndCombo / np.max(self.ndCombo)) * np.sign(self.ndn)
         
         # Get the shock front where the derivative combo peaks
-        idx = np.where(self.ndCombo == np.max(self.ndCombo))[0]
-        self.idx1 = idx[0]+1 # add 1 to get back to non ddt indexing
-        self.tShock = self.ddt_dts[self.idx1-1]
+        try:
+            idx = np.where(self.ndCombo == np.max(self.ndCombo))[0]
+            self.idx1 = idx[0]+1 # add 1 to get back to non ddt indexing
+            self.tShock = self.ddt_dts[self.idx1-1]
+        except:
+            print('Cannot determine shock front')
+            self.tShock = None
         
-        # Get the flux rope front where beta < 1 first time after shock
-        idxB = np.where(self.Beta < 1)[0]
-        idxFR0 = np.min(idxB[np.where(idxB > (self.idx1))][0])
-        self.idx2 = idxFR0
-        self.tFRfront = self.dts[idxFR0]
-        
+        # Get the flux rope front, ideally where beta < 1 first time after shock
+        # but some simulations are all low beta so that won't work
+        useBeta = True
+        if self.tShock:
+            if self.Beta[self.idx1] < 1: useBeta = False
+        # Beta version    
+        if useBeta:
+            try:
+                idxB = np.where(self.Beta < 1)[0]
+                idxFR0 = np.min(idxB[np.where(idxB > (self.idx1))][0])
+                self.idx2 = idxFR0
+                self.tFRfront = self.dts[idxFR0]
+            except:
+                print('Cannot determine FR front')
+                self.tFRfront = None
+        # Deriv of density as backup
+        else:
+            try:
+                subddtn = self.ddt_n[self.idx1-1:]
+                idxN = np.where(subddtn == np.min(subddtn))[0][0]
+                self.tFRfront = self.ddt_dts[self.idx1-1:][idxN]
+                self.idx2 = np.where(self.dts == self.tFRfront)[0][0]
+            except:
+                print('Cannot determine FR front')
+                self.tFRfront = None
+                
+            
         # Get flux rope end where beta > 1 first time after front
-        idxE = np.where(self.Beta > 1)[0]
-        idxFRe = np.min(idxE[np.where(idxE > idxFR0)][0])
-        self.idx3 = idxFRe
-        self.tFRend = self.dts[idxFRe]
+        subBeta = self.Beta[self.idx2+2:] # add a couple points to rm front 
+        subtimes = self.dts[self.idx2+2:]
+        maxBeta = np.max(subBeta)
+        if maxBeta > 1: 
+            try:
+                idxE = np.where(self.Beta > 1)[0]
+                idxFRe = np.min(idxE[np.where(idxE > idxFR0)][0])
+                self.idx3 = idxFRe
+                self.tFRend = self.dts[idxFRe]
+            except:
+                print('Cannot determine FR end')
+                self.tFRend = None
+        else:
+            try:
+                idxE = np.where(subBeta == maxBeta)[0]
+                self.tFRend = subtimes[idxE[0]]
+                self.idx3 = np.where(self.dts == self.tFRend)[0][0]
+            except:
+                print('Cannot determine FR end')
+                self.tFRend = None
         
+    def getValues(self, fileName=None):
+        outThing = ''
         
-    def getValues(self):
-        # Print arrival times (already calculated presumably)
-        print ('')
-        print ('Shock:   ', self.tShock.strftime("%Y-%m-%d %H:%M:%S"))
-        print ('FR Front:', self.tFRfront.strftime("%Y-%m-%d %H:%M:%S"))
-        print ('FR End:  ', self.tFRend.strftime("%Y-%m-%d %H:%M:%S"))
-        print ('')
+        # Determine if writing to file or printing
+        if type(fileName) == type(None):
+            printIt = True
+        else:
+            printIt = False
+            f = open(fileName, 'w')
+
+        if printIt:
+            # Print arrival times (already calculated presumably)
+            print ('')
+            print ('Shock:    ', self.tShock.strftime("%Y-%m-%d %H:%M:%S"))
+            print ('FR Front: ', self.tFRfront.strftime("%Y-%m-%d %H:%M:%S"))
+            print ('FR End:   ', self.tFRend.strftime("%Y-%m-%d %H:%M:%S"))
+            print ('')
+        else:
+            f.write('Shock:    ' +  self.tShock.strftime("%Y-%m-%d %H:%M:%S") + '\n')
+            f.write('FR Front: ' + self.tFRfront.strftime("%Y-%m-%d %H:%M:%S") + '\n')
+            f.write('FR End:   ' + self.tFRend.strftime("%Y-%m-%d %H:%M:%S") + '\n')
+            f.write('\n')
         
+        # Get fractional year for dates
+        myYR = datetime.datetime(self.tFRfront.year,1,1,0,0)
+        outThing += str(self.tFRfront.year) + ' '
+        if self.tShock:
+            outThing += '{:11.6f}'.format((self.tShock - myYR).total_seconds()/3600./24) + ' '
+        else:
+            outThing += '-999'.rjust(11) + ' '
+            
+        if self.tFRfront:
+            outThing += '{:11.6f}'.format((self.tFRfront - myYR).total_seconds()/3600./24) + ' '
+        else:
+            outThing += '-999'.rjust(11) + ' '    
+
+        if self.tFRend:
+            outThing += '{:11.6f}'.format((self.tFRend - myYR).total_seconds()/3600./24) + ' '
+        else:
+            outThing += '-999'.rjust(11) + ' '    
+             
         # Calculate durations
         shockDur = (self.tFRfront - self.tShock ).total_seconds() / 3600.
         FRDur    = ( self.tFRend - self.tFRfront).total_seconds() / 3600.
-        print ('Shock Duration (hr): ', '{:4.2f}'.format(shockDur))
-        print ('FR Duration (hr):    ', '{:4.2f}'.format(FRDur))
-        print ('')
+        if printIt:
+            print ('Shock Duration (hr): '+ '{:6.2f}'.format(shockDur))
+            print ('FR Duration (hr):    '+ '{:6.2f}'.format(FRDur))
+            print ('')
+        else:
+            f.write('Shock Duration (hr): '+ '{:6.2f}'.format(shockDur)+ '\n')
+            f.write('FR Duration (hr):    '+ '{:6.2f}'.format(FRDur)+ '\n')
+            f.write('\n')
+            
+        outThing += '{:6.2f}'.format(shockDur)+' '+'{:6.2f}'.format(FRDur)+' '
 
         sIdxs = [self.idx1 + i for i in range(self.idx2 - self.idx1)]
         FRIdxs = [self.idx2 + i for i in range(self.idx3 - self.idx2 +1)]
@@ -177,51 +255,122 @@ class ACEobsH5:
         # Check if contiguous 
         BzDurs = []
         for idxs in [sBzIdxs, frBzIdxs]:
-            if len(idxs) == idxs[-1]-idxs[0]+1:
-                BzDurs.append(len(idxs))
+            if len(idxs) != 0:
+                if len(idxs) == idxs[-1]-idxs[0]+1:
+                    BzDurs.append(len(idxs))
+                else:
+                    theseDurs = []
+                    prevVal = idxs[0]
+                    startVal = idxs[0]
+                    for i in range(len(idxs)-1):
+                        nextVal = idxs[i+1]
+                        if nextVal - prevVal != 1:
+                            theseDurs.append(prevVal-startVal+1)
+                            startVal = nextVal
+                        prevVal = nextVal
+                    theseDurs.append(prevVal-startVal+1)
+                    BzDurs.append(theseDurs)
             else:
-                theseDurs = []
-                prevVal = idxs[0]
-                startVal = idxs[0]
-                for i in range(len(idxs)-1):
-                    nextVal = idxs[i+1]
-                    if nextVal - prevVal != 1:
-                        theseDurs.append(prevVal-startVal+1)
-                        startVal = nextVal
-                    prevVal = nextVal
-                theseDurs.append(prevVal-startVal+1)
-                BzDurs.append(theseDurs)
+                BzDurs.append(0)
         
+        if printIt:
+            print ('|-------- Mean values --------|')
+            print ('|--------------Sheath ----FR--|')
+            print (' Btot [nT]: ', '{:10.2f}'.format(np.mean(sB)), '{:10.2f}'.format(np.mean(frB)))
+            print (' Bz [nT]:   ', '{:10.2f}'.format(np.mean(sBz)), '{:10.2f}'.format(np.mean(frBz)))
+            print (' v [km/s]:  ', '{:10.2f}'.format(np.mean(sv)), '{:10.2f}'.format(np.mean(frv)))
+            print (' n [cm-3]:  ', '{:10.2f}'.format(np.mean(sn)), '{:10.2f}'.format(np.mean(frn)))
+            print (' log(T) [K]:', '{:10.2f}'.format(np.mean(sT)), '{:10.2f}'.format(np.mean(frT)))
+            print (' vx Bz:     ', '{:10.2f}'.format(np.mean(svxBz)), '{:10.2f}'.format(np.mean(frvxBz)))
+            print (' Kp:        ', '{:10.2f}'.format(np.mean(sKp)), '{:10.2f}'.format(np.mean(frKp)))
+            print ('')
+            print ('|-------- Max values ---------|')
+            print ('|--------------Sheath ----FR--|')
+            print (' Btot [nT]: ', '{:10.2f}'.format(np.max(sB)), '{:10.2f}'.format(np.max(frB)))
+            print (' Bz [nT]:   ', '{:10.2f}'.format(np.min(sBz)), '{:10.2f}'.format(np.min(frBz)))
+            print (' v [km/s]:  ', '{:10.2f}'.format(np.max(sv)), '{:10.2f}'.format(np.max(frv)))
+            print (' n [cm-3]:  ', '{:10.2f}'.format(np.max(sn)), '{:10.2f}'.format(np.max(frn)))
+            print (' log(T) [K]:', '{:10.2f}'.format(np.max(sT)), '{:10.2f}'.format(np.max(frT)))
+            print (' vx Bz:     ', '{:10.2f}'.format(np.min(svxBz)), '{:10.2f}'.format(np.min(frvxBz)))
+            print (' Kp:        ', '{:10.2f}'.format(np.max(sKp)), '{:10.2f}'.format(np.max(frKp)))
+            print ('')
         
-        print ('|-------- Mean values --------|')
-        print ('|--------------Sheath ----FR--|')
-        print (' Btot [nT]: ', '{:8.2f}'.format(np.mean(sB)), '{:8.2f}'.format(np.mean(frB)))
-        print (' Bz [nT]:   ', '{:8.2f}'.format(np.mean(sBz)), '{:8.2f}'.format(np.mean(frBz)))
-        print (' v [km/s]:  ', '{:8.2f}'.format(np.mean(sv)), '{:8.2f}'.format(np.mean(frv)))
-        print (' n [cm-3]:  ', '{:8.2f}'.format(np.mean(sn)), '{:8.2f}'.format(np.mean(frn)))
-        print (' log(T) [K]:', '{:8.2f}'.format(np.mean(sT)), '{:8.2f}'.format(np.mean(frT)))
-        print (' vx Bz:     ', '{:8.2f}'.format(np.mean(svxBz)), '{:8.2f}'.format(np.mean(frvxBz)))
-        print (' Kp:        ', '{:8.2f}'.format(np.mean(sKp)), '{:8.2f}'.format(np.mean(frKp)))
-        print ('')
-        print ('|-------- Max values ---------|')
-        print ('|--------------Sheath ----FR--|')
-        print (' Btot [nT]: ', '{:8.2f}'.format(np.max(sB)), '{:8.2f}'.format(np.max(frB)))
-        print (' Bz [nT]:   ', '{:8.2f}'.format(np.min(sBz)), '{:8.2f}'.format(np.min(frBz)))
-        print (' v [km/s]:  ', '{:8.2f}'.format(np.max(sv)), '{:8.2f}'.format(np.max(frv)))
-        print (' n [cm-3]:  ', '{:8.2f}'.format(np.max(sn)), '{:8.2f}'.format(np.max(frn)))
-        print (' log(T) [K]:', '{:8.2f}'.format(np.max(sT)), '{:8.2f}'.format(np.max(frT)))
-        print (' vx Bz:     ', '{:8.2f}'.format(np.min(svxBz)), '{:8.2f}'.format(np.min(frvxBz)))
-        print (' Kp:        ', '{:8.2f}'.format(np.max(sKp)), '{:8.2f}'.format(np.max(frKp)))
-        print ('')
+            print ('')
+            print ('FR expansion [km/s]:', '{:10.2f}'.format((frv[0]- frv[-1])/2))
+            print ('Sheath Compression: ', '{:10.2f}'.format(comp))
         
-        print ('')
-        print ('FR expansion [km/s]:', '{:8.2f}'.format((frv[0]- frv[-1])/2))
-        print ('Sheath Compression: ', '{:8.2f}'.format(comp))
+            print ('')
+            print ('Duration with negative Bz (hrs)')
+            print ('Sheath:     ', BzDurs[0])
+            print ('FR:         ', BzDurs[1])
+            
+        else:
+            f.write('|-------- Mean values --------|'+ '\n')
+            f.write('|--------------Sheath ----FR--|'+ '\n')
+            f.write(' Btot [nT]: '+ '{:10.2f}'.format(np.mean(sB)) + '{:10.2f}'.format(np.mean(frB))+ '\n')
+            f.write(' Bz [nT]:   '+ '{:10.2f}'.format(np.mean(sBz))+ '{:10.2f}'.format(np.mean(frBz))+ '\n')
+            f.write(' v [km/s]:  '+ '{:10.2f}'.format(np.mean(sv))+ '{:10.2f}'.format(np.mean(frv))+ '\n')
+            f.write(' n [cm-3]:  '+ '{:10.2f}'.format(np.mean(sn)) + '{:10.2f}'.format(np.mean(frn))+ '\n')
+            f.write(' log(T) [K]:'+ '{:10.2f}'.format(np.mean(sT)) + '{:10.2f}'.format(np.mean(frT))+ '\n')
+            f.write(' vx Bz:     '+ '{:10.2f}'.format(np.mean(svxBz)) + '{:10.2f}'.format(np.mean(frvxBz))+ '\n')
+            f.write(' Kp:        '+ '{:10.2f}'.format(np.mean(sKp)) + '{:10.2f}'.format(np.mean(frKp))+ '\n')
+            f.write('\n')
+            f.write('|-------- Max values ---------|'+ '\n')
+            f.write('|--------------Sheath ----FR--|'+ '\n')
+            f.write(' Btot [nT]: '+ '{:10.2f}'.format(np.max(sB)) + '{:10.2f}'.format(np.max(frB))+ '\n')
+            f.write(' Bz [nT]:   '+ '{:10.2f}'.format(np.min(sBz)) + '{:10.2f}'.format(np.min(frBz))+ '\n')
+            f.write(' v [km/s]:  '+ '{:10.2f}'.format(np.max(sv)) + '{:10.2f}'.format(np.max(frv))+ '\n')
+            f.write(' n [cm-3]:  '+ '{:10.2f}'.format(np.max(sn)) + '{:10.2f}'.format(np.max(frn))+ '\n')
+            f.write(' log(T) [K]:'+ '{:10.2f}'.format(np.max(sT)) + '{:10.2f}'.format(np.max(frT))+ '\n')
+            f.write(' vx Bz:     '+ '{:10.2f}'.format(np.min(svxBz)) + '{:10.2f}'.format(np.min(frvxBz))+ '\n')
+            f.write(' Kp:        '+ '{:10.2f}'.format(np.max(sKp)) + '{:10.2f}'.format(np.max(frKp))+ '\n')
+            f.write('\n')
+           
+            f.write('FR expansion [km/s]:'+ '{:10.2f}'.format((frv[0]- frv[-1])/2)+ '\n')
+            f.write('Sheath Compression: '+ '{:10.2f}'.format(comp)+ '\n')
         
-        print ('')
-        print ('Duration with negative Bz (hrs)')
-        print ('Sheath:     ', BzDurs[0])
-        print ('FR:         ', BzDurs[1])
+            f.write('\n')
+            f.write('Duration with negative Bz (hrs)'+ '\n')
+            f.write('Sheath:     '+ '{:6.1f}'.format(BzDurs[0])+ '\n')
+            f.write('FR:         '+ '{:6.1f}'.format(BzDurs[1])+ '\n')
+            f.close()
+        
+        outThing += '{:10.2f}'.format(np.mean(sB)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(sBz)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(sv)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(sn)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(sT)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(svxBz)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(sKp)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(frB)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(frBz)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(frv)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(frn)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(frT)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(frvxBz)) + ' '
+        outThing += '{:10.2f}'.format(np.mean(frKp)) + ' '
+        
+        outThing += '{:10.2f}'.format(np.max(sB)) + ' '
+        outThing += '{:10.2f}'.format(np.min(sBz)) + ' '
+        outThing += '{:10.2f}'.format(np.max(sv)) + ' '
+        outThing += '{:10.2f}'.format(np.max(sn)) + ' '
+        outThing += '{:10.2f}'.format(np.max(sT)) + ' '
+        outThing += '{:10.2f}'.format(np.min(svxBz)) + ' '
+        outThing += '{:10.2f}'.format(np.max(sKp)) + ' '
+        outThing += '{:10.2f}'.format(np.max(frB)) + ' '
+        outThing += '{:10.2f}'.format(np.min(frBz)) + ' '
+        outThing += '{:10.2f}'.format(np.max(frv)) + ' '
+        outThing += '{:10.2f}'.format(np.max(frn)) + ' '
+        outThing += '{:10.2f}'.format(np.max(frT)) + ' '
+        outThing += '{:10.2f}'.format(np.min(frvxBz)) + ' '
+        outThing += '{:10.2f}'.format(np.max(frKp)) + ' '
+        
+        outThing += '{:10.2f}'.format((frv[0]- frv[-1])/2) + ' '
+        outThing += '{:10.2f}'.format(comp) + ' '
+        outThing += '{:6.1f}'.format(BzDurs[0]) + ' '
+        outThing += '{:6.1f}'.format(BzDurs[1]) + ' '
+        
+        return (outThing)
         
         
 
@@ -266,9 +415,12 @@ class ACEobsH5:
         for i in range(6):
             myf   = allfs[i]
             ylims = myf.get_ylim()
-            myf.plot([self.tShock, self.tShock], ylims, 'k--')
-            myf.plot([self.tFRfront, self.tFRfront], ylims, 'k--')
-            myf.plot([self.tFRend, self.tFRend], ylims, 'k--')
+            if self.tShock:
+                myf.plot([self.tShock, self.tShock], ylims, 'k--')
+            if self.tFRfront:
+                myf.plot([self.tFRfront, self.tFRfront], ylims, 'k--')
+            if self.tFRend:
+                myf.plot([self.tFRend, self.tFRend], ylims, 'k--')
             if i != 4:
                 myf.set_ylim(ylims)
         
@@ -283,6 +435,11 @@ class ACEobsH5:
         
         plt.savefig(figName)        
             
-obs = ACEobsH5(h5File)
-obs.getValues()
-obs.plotIt()
+#h5File = '/Users/kaycd1/GAMERA/GAMERA_ACE_time_profiles/ACE.sc.h5'
+h5File = '/Users/kaycd1/GAMERA/gamhelio_data_ACE_260304/ACE.sc-vel_202304211200R000_agong-' #900.h5'
+vtags = ['900', '950', '1000', '1050', '1100']
+for vtag in vtags:
+    obs = ACEobsH5(h5File+vtag+'.h5')
+    outThing = obs.getValues(fileName='results'+vtag+'.txt')
+    print (outThing)
+    obs.plotIt(figName='results'+vtag+'.png')
