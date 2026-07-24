@@ -2,12 +2,9 @@ import sys
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+from astropy.time import Time
 
-#os.environ["HDF5_PLUGIN_PATH"] = "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packageshdf5plugin/plugins/"
-#import hdf5plugin
 import h5py
-
-from gameragui import extract_GAMERA_simulation
 
 dtor = np.pi / 180.
 
@@ -38,7 +35,7 @@ class GAMERAres:
         self.filename = filename
         self.h5_data = h5py.File(self.filename)
         self.keys = list(self.h5_data.keys())
-                
+        
         #|--- Load top level data ---|
         self.X = self.h5_data["X"][:]
         self.Y = self.h5_data["Y"][:]
@@ -62,7 +59,19 @@ class GAMERAres:
         self.phimid = 0.5*(self.phigrid[1:] + self.phigrid[:-1])
        
         self.mjd_times = self.h5_data["timeAttributeCache"]["MJD"][:]
-        self.ntime = len(self.mjd_times)
+        self.ntimes = len(self.mjd_times)
+        self.strTimes = []
+        self.dateTimes = []
+        self.timeDeltas = []
+        for i in range(self.ntimes):
+            dt = Time(self.mjd_times[i], format='mjd', scale='utc').to_datetime()
+            strT = dt.strftime("%Y-%m-%d %H:%M")
+            self.dateTimes.append(dt)
+            self.strTimes.append(strT)
+            self.timeDeltas.append((dt - self.dateTimes[0]).total_seconds()/3600.)
+        self.strTimes = np.array(self.strTimes)
+        self.dateTimes = np.array(self.dateTimes)
+        self.timeDeltas = np.array(self.timeDeltas)
         
         # lower levels compressed with szip. pip h5py will not be happy about this. 
         # install via homebrew first (see notes h5syncloadFix.txt)
@@ -132,7 +141,6 @@ class GAMERAres:
         pidx = np.array(pidx)         
         tidx = np.array(tidx)         
         ridx = np.array(ridx)  
-        
         # |--- Get weighting coeffs for interp ---|    
         # Spacing at this point, seems to be uniform but safe to calc instead of assume
         pdel = self.phimid[pidx+1] - self.phimid[pidx]    
@@ -188,13 +196,13 @@ class GAMERAres:
 
 
 
-filePath = '/Users/kaycd1/GAMERA/fromDevoj/256serial/wsaCR2261cme05092022.gam.h5'
-res = GAMERAres(filePath)
+#filePath = '/Users/kaycd1/GAMERA/fromDevoj/256serial/wsaCR2261cme05092022.gam.h5'
+#res = GAMERAres(filePath)
 
-fakepts = [[10, 92, 200], [5, 88, 205 ]]
+#fakepts = [[0, 92, 200], [5, 88, 205 ]]
 #fakepts = [[10, 92, 200]]
-res.getInterpVal(fakepts, ['Bx', 'Vx'])
-
+#nums = res.getInterpVal(fakepts, ['Bx', 'Vx'])
+#print (nums)
 #fig = plt.figure()
 #plt.imshow( res.r[:,10,:])
 #plt.show()

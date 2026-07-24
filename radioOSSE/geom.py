@@ -64,7 +64,7 @@ def CART2SPH(x_in):
     """
     r_out = np.sqrt(x_in[0]**2 + x_in[1]**2 + x_in[2]**2)
     colat = np.arccos(x_in[2] / r_out)  * radeg
-    lon_out = (np.arctan(x_in[1] / x_in[0]) * radeg) % 360
+    lon_out = (np.arctan2(x_in[1] , x_in[0]) * radeg) % 360
 
     return [lon_out, colat, r_out]
 
