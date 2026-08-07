@@ -120,7 +120,7 @@ class GAMERAres:
             if (apt[0] >= self.phimid[0]) & (apt[0] <= self.phimid[-1]):
                 pidx.append(np.max(np.where(self.phimid <= apt[0])))
             # Phi at the loop point
-            elif (apt[0] <= self.phimid[0]) & (apt[0] >= self.phimid[-1] -360):
+            elif (apt[0] <= self.phimid[0]) or (apt[0] >= self.phimid[-1] -360):
                 pidx.append(-1)
             else:
                 sys.exit('Cannot process phi/lon value '+str(apt[0])+'. Should be in 0-360 deg')
