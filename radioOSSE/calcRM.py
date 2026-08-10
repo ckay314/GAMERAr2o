@@ -36,8 +36,8 @@ fname = 'largeliss_grid.pkl'
 #gridLon = [-30, -20,-10,0,10,20, 30]
 #gridLat = [-10, 0, 10]
 
-#gridLon = [0]
-#gridLat = [0]
+#gridLon = [-2,0,2]
+#gridLat = [-2,0,2]
 gridLon = np.linspace(-30,30,61, dtype=int)
 gridLat = np.linspace(-10,10,21, dtype=int)
 
@@ -54,6 +54,10 @@ gamFile = '/Users/kaycd1/GAMERA/fromDevoj/256serial/wsaCR2261cme05092022.gam.h5'
 
 # Interp parameter pickle
 paramPickle = 'interpResMegaGrid.pkl'    
+
+# RM pickle (gridified and has RM)
+RMfile = 'RMresMegaGrid.pkl'
+
 
 def fakeSats():
     # Not made to interface with rest at this point
@@ -289,7 +293,7 @@ def getGamParams(pathFile, gamFile, paramPickle):
         pickle.dump(collectParams, file)    
 
 
-def plotFaraday(mySat, allParams, gamRes, figName):
+def calcFaraday(satData, paramData, gamRes, saveIt=None):
     # |----------------------------|
     # |--- Get Faraday Rotation ---|
     # |----------------------------|
@@ -299,85 +303,145 @@ def plotFaraday(mySat, allParams, gamRes, figName):
     A = 2.36e4 # rad m^2 /T /s
     coeff = 2.64e-17 # rad / G / cm^2
     nT2T = 1e-9 # nanotesla to tesla
-    nT2G = 1e-5
     rsun2m = 6.957e8 # Rsun to m
-    c = 2.99e8
-    #wave0 = c /f0
+    c = 2.99e8 # in m
     
+    nKeys = len(satData.keys())
+    keys = np.array(list(satData.keys()))
     
-    sats = mySat['sats'] # [sat1, sat2, ...] where sat is [nTimes, 3] with xyz in stony AU
-    ts = mySat['ts']
-    dts = mySat['dts']
-    
+    temp = paramData[keys[0]][0,0,:,0]
+    nBase = len(list(combinations(temp, 2)))
+    #nBase = len(paramData[keys[0]][0,0,:,0]) # should be same for all
     gamDTs = gamRes.timeDeltas[1:] - gamRes.timeDeltas[1]
     nTimes = len(gamDTs)
-    rwT0 = ts[1]
-    shiftSatDTs = dts - dts[1]
-    idxs = []
-    fracs   = []
-    for i in range(nTimes):
-        b4idx = np.max(np.where(shiftSatDTs < gamDTs[i]))
-        f1 = (gamDTs[i] - shiftSatDTs[b4idx]) / (shiftSatDTs[b4idx+1] - shiftSatDTs[b4idx]) 
-        idxs.append(b4idx)
-        fracs.append(f1)
-    idxs  = np.array(idxs)
-    fracs = np.array(fracs)
-
-
-    miniSats = []
-    for i in range(nSats):
-        mySat = sats[i]
-        myX = (1 - fracs) * mySat[idxs,0] + fracs * mySat[idxs+1, 0]
-        myY = (1 - fracs) * mySat[idxs,1] + fracs * mySat[idxs+1, 1]
-        myZ = (1 - fracs) * mySat[idxs,2] + fracs * mySat[idxs+1, 2]
-        miniSat = np.transpose(np.array([myX, myY, myZ]))
-        miniSats.append(miniSat)
     
     
-    pairs = list(combinations(range(len(miniSats)), 2))
-    
-    nTimes = allParams.shape[0]
-    rms = np.zeros([len(pairs), nTimes])
-    
-    for j in range(len(pairs)):
-        sc1id = pairs[j][0]
-        sc2id = pairs[j][1]
+    # |--- Convert keys to lon and lat ---|
+    lonlats = np.zeros([nKeys, 2])
+    for i in range(nKeys):
+        key = keys[i]
+        splitIt = key.split('Lat')
+        lonlats[i,0] = float(splitIt[0].replace('Lon',''))
+        lonlats[i,1] = float(splitIt[1])
         
+    # |--- Gridify ---|
+    myLons = np.unique(lonlats[:,0])
+    myLats = np.unique(lonlats[:,1])    
+    lons, lats = np.meshgrid(myLons, myLats)
+    myShape = lons.shape #[nLat, nLon]
+    key2id = {}
+    for key in satData.keys():
+        i1 = np.where(myLons == lonlats[i,0])
+        i0 = np.where(myLats == lonlats[i,1])
+        key2id[key] = [i0, i1]
+    
+    
+    #allRms[key] = [baseline, tidx] -> 
+    allRes = np.zeros([9, myShape[0], myShape[1], nBase, nTimes]) # [nParams, lat, lon, baseline, t] params = RM, n1, bx1, by1, bz1, n2, bx2, by2, bz2
+    allPairs = {}
+    for key in satData.keys():
         
+        mySat = satData[key]
+        allParams = paramData[key]
+        myLL = key2id[key]
+        
+        sats = mySat['sats'] # [sat1, sat2, ...] where sat is [nTimes, 3] with xyz in stony AU
+        ts = mySat['ts']
+        dts = mySat['dts']
+    
+        rwT0 = ts[1]
+        shiftSatDTs = dts - dts[1]
+        idxs = []
+        fracs   = []
         for i in range(nTimes):
-            myData = allParams[i,j,:,:] # [baseline, param]
-            sc1xyz = miniSats[sc1id][ i, :]
-            sc2xyz = miniSats[sc2id][ i, :]
+            b4idx = np.max(np.where(shiftSatDTs < gamDTs[i]))
+            f1 = (gamDTs[i] - shiftSatDTs[b4idx]) / (shiftSatDTs[b4idx+1] - shiftSatDTs[b4idx]) 
+            idxs.append(b4idx)
+            fracs.append(f1)
+        idxs  = np.array(idxs)
+        fracs = np.array(fracs)
+
+
+        miniSats = []
+        for i in range(nSats):
+            mySat = sats[i]
+            myX = (1 - fracs) * mySat[idxs,0] + fracs * mySat[idxs+1, 0]
+            myY = (1 - fracs) * mySat[idxs,1] + fracs * mySat[idxs+1, 1]
+            myZ = (1 - fracs) * mySat[idxs,2] + fracs * mySat[idxs+1, 2]
+            miniSat = np.transpose(np.array([myX, myY, myZ]))
+            miniSats.append(miniSat)
         
-            sc_dist = np.sqrt(np.sum((sc1xyz - sc2xyz)**2)) # in Rs
-            unitS = (sc1xyz - sc2xyz) / sc_dist
-            sang = geom.CART2SPH(unitS)
-            
-            # Get dens, assuming Gamera cm-3
-            dens = myData[:,0] * 1e6
         
-            # Get B vector
-            Bvec = myData[:,1:] * nT2T
-            Bmag = np.sqrt(np.sum(Bvec**2, axis=1))
-            Bunit = Bvec[0,:] / Bmag[0]
-            Bang = geom.CART2SPH(Bunit)
-            ang = np.dot(Bunit, unitS)
-            # Dot with ds and sum 
-            intBds= np.mean(np.dot(Bvec, unitS)*dens) # mean to mult by full path len
-            # Calc rotation measure
-            rm = (A / c**2) * intBds * sc_dist * rsun2m 
-            rms[j,i] = rm 
+        pairs = list(combinations(range(len(miniSats)), 2))
+        
+
+        for j in range(len(pairs)):
+            sc1id = pairs[j][0]
+            sc2id = pairs[j][1]
+        
+        
+            for i in range(nTimes):
+                myData = allParams[i,j,:,:] # [baseline, param]
+                sc1xyz = miniSats[sc1id][ i, :]
+                sc2xyz = miniSats[sc2id][ i, :]
+        
+                sc_dist = np.sqrt(np.sum((sc1xyz - sc2xyz)**2)) # in Rs
+                unitS = (sc1xyz - sc2xyz) / sc_dist
+                sang = geom.CART2SPH(unitS)
             
+                # Get dens, assuming Gamera cm-3
+                dens = myData[:,0] * 1e6
+        
+                # Get B vector
+                Bvec = myData[:,1:] * nT2T
+                Bmag = np.sqrt(np.sum(Bvec**2, axis=1))
+                Bunit = Bvec[0,:] / Bmag[0]
+                Bang = geom.CART2SPH(Bunit)
+                ang = np.dot(Bunit, unitS)
+                # Dot with ds and sum 
+                intBds= np.mean(np.dot(Bvec, unitS)*dens) # mean to mult by full path len
+                # Calc rotation measure
+                rm = (A / c**2) * intBds * sc_dist * rsun2m 
+                #srms[j,i] = rm
+                # Rot measure
+                allRes[0, myLL[0], myLL[1], j, i] = rm
+                # N 
+                allRes[1, myLL[0], myLL[1], j, i] = myData[:,0][0]
+                allRes[5, myLL[0], myLL[1], j, i] = myData[:,0][-1]
+                # Bx
+                allRes[2, myLL[0], myLL[1], j, i] = myData[:,1][0]
+                allRes[6, myLL[0], myLL[1], j, i] = myData[:,1][-1]
+                # By
+                allRes[3, myLL[0], myLL[1], j, i] = myData[:,2][0]
+                allRes[7, myLL[0], myLL[1], j, i] = myData[:,2][-1]
+                # Bz
+                allRes[4, myLL[0], myLL[1], j, i] = myData[:,3][0]
+                allRes[8, myLL[0], myLL[1], j, i] = myData[:,3][-1]
+                
+        allPairs[key] = pairs
+    
+    if type(saveIt) != type(None):
+        outStuff = {}
+        outStuff['params'] = allRes
+        outStuff['pairs'] = allPairs
+        with open(saveIt, 'wb') as file:
+            pickle.dump(outStuff, file)
+        
+    return allRes, allPairs
+    
+def plotFaraday( myRM, pairs, time=None, figName='temp.png'):
+    if type(time) == type(None):
+        time = range(len(myRM[0,:]))
      
     fig = plt.figure()
     for j in range(len(pairs)):
-        plt.plot(gamDTs, rms[j,:]/1e-5, label='Sat'+str(pairs[j][0])+'-Sat'+str(pairs[j][1]))
+        plt.plot(time, myRM[j,:]/1e-5, label='Sat'+str(pairs[j][0])+'-Sat'+str(pairs[j][1]))
     plt.xlabel('t (hr)')
     plt.ylabel('RM (10$^{-5}$ rad/m$^2$)')
     plt.legend()
     plt.tight_layout()
-    plt.show()
-    #plt.savefig(figName)      
+    #plt.show()
+    plt.savefig(figName)      
     plt.close()
         
 
@@ -496,6 +560,64 @@ def plotProfiles(satData, paramData, gamRes, keys):
     plt.tight_layout()
     plt.savefig('profileComp.png')
 
+def RMmaps(rms, pairs):
+    nKeys = len(rms.keys())
+    keys = np.array(list(rms.keys()))
+    nBase = len(pairs[keys[0]]) # should be same for all
+    
+    # |--- Convert keys to lon and lat ---|
+    lonlats = np.zeros([nKeys, 2])
+    for i in range(nKeys):
+        key = keys[i]
+        splitIt = key.split('Lat')
+        lonlats[i,0] = float(splitIt[0].replace('Lon',''))
+        lonlats[i,1] = float(splitIt[1])
+        
+    # |--- Gridify ---|
+    myLons = np.unique(lonlats[:,0])
+    myLats = np.unique(lonlats[:,1])    
+    lons, lats = np.meshgrid(myLons, myLats)
+    myShape = lons.shape #[nLat, nLon]
+        
+    # |--- Get max abs and range ---|
+    maxs = np.zeros([myShape[0], myShape[1], nBase])
+    rngs = np.zeros([myShape[0], myShape[1], nBase])
+    for i in range(nKeys):
+        key = keys[i]
+        myRM = rms[key] # [nBase, nTime]
+        i1 = np.where(myLons == lonlats[i,0])
+        i0 = np.where(myLats == lonlats[i,1])
+        maxs[i0,i1,:] =  np.max(np.abs(myRM), axis=1)
+        
+    
+    fig, axes = plt.subplots(4, 3, figsize=(8, 6), sharex=True, sharey=True)
+    faxes = axes.flatten()
+    logMax =  np.log10(maxs)
+    for i in range(nBase):
+        faxes[i].contourf(lons,lats, logMax[:,:,i], vmin=-7, vmax=-3)
+        faxes[i].set_aspect('equal')
+        faxes[i].set_title('Baseline '+str(i))
+    # Overall max
+    ovMax = np.max(np.log10(maxs), axis=2)
+    im = faxes[10].contourf(lons,lats, ovMax, vmin=-7, vmax=-3)
+    faxes[10].set_aspect('equal')
+    faxes[10].set_title('Baseline '+str(i))
+    cbar = fig.colorbar(im, ax=axes, shrink=0.5, location='top')
+    cbar.set_label('log$_{10}$ Max RM')
+    
+    # who max
+    whoMax = np.zeros(myShape)
+    for i in range(len(myLats)):
+        for j in range(len(myLons)):
+            whoMax[i,j] = np.where(logMax[i,j,:] == ovMax[i,j])[0][0]
+            
+    im2 = faxes[11].contourf(lons,lats, whoMax, levels=range(nBase), cmap='plasma')
+    faxes[11].set_aspect('equal')
+    faxes[11].set_title('Max Baseline')
+    cbar2 = fig.colorbar(im2, ax=faxes[11], shrink=0.7)
+    plt.show()
+        
+
 if False:
     sat1 = miniSats[0]
     sat2 = miniSats[1]
@@ -532,10 +654,18 @@ if False:
 
 #|--- Function calls ---|
 # Get satellite paths pickle
-getSatPickle('grid', xlFile, pathFile, gridLon=gridLon, gridLat=gridLat)
+#getSatPickle('grid', xlFile, pathFile, gridLon=gridLon, gridLat=gridLat)
 
 # Get interpolated data
 #getGamParams(pathFile, gamFile, paramPickle)
+
+# Calculate RM
+with open(pathFile, 'rb') as file:
+    satData = pickle.load(file)
+with open(paramPickle, 'rb') as file:
+    paramData = pickle.load(file)
+gamRes = GAMERAres(gamFile)
+#allRMs, allPairs = calcFaraday(satData, paramData, gamRes, saveIt=RMfile)
 
 # |-----------------|
 # |--- Plot data ---|
@@ -549,11 +679,19 @@ gamRes = GAMERAres(gamFile)
 #for i in range(59):
 #    print (gamRes.getInterpVal([[0.1,110,213]],'D', timestep=i))
 
-#plotProfiles(satData, paramData, gamRes, ['Lon0Lat0', 'Lon0Lat-10', 'Lon0Lat10'])
+#plotProfiles(satData, paramData, gamRes, ['Lon0Lat0', 'Lon0Lat-10', 'Lon0Lat10'])'''
 
-# all the indiv RM profiles
-for key in paramData:
-    mySat = satData[key]
-    myParams = paramData[key]
-    figName = 'RM_t400_'+key+'.png'
-    plotFaraday(mySat, myParams, gamRes, figName)'''
+# |--- RM profiles for each lat/lon ---|
+if False:
+    gamDTs = gamRes.timeDeltas[1:] - gamRes.timeDeltas[1]
+    for key in paramData:
+        #mySat = satData[key]
+        #myParams = paramData[key]
+        myRM = allRMs[key]
+        myPairs = allPairs[key]
+        figName = 'RM_t400_'+key+'.png'
+        plotFaraday( myRM, myPairs, time=gamDTs, figName=figName)
+
+# |--- 2D max/range RM maps ---|
+#RMmaps(allRMs, allPairs)    
+
