@@ -11,6 +11,9 @@ from sunpy.coordinates import HeliographicStonyhurst
 import pandas as pd
 import datetime
 import pickle
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib.cm as cm
+import matplotlib.colors as colors
 
 import geom
 # Gamera coords in (lon, colat, r) = (phi, theta, r) = (deg, deg, rs)
@@ -268,7 +271,7 @@ def getGamParams(pathFile, gamFile, paramPickle):
         # |-----------------------|
         allParams = []
         for i in range(nTimes):
-            print ('Interpolating time', i+1, 'of', nTimes)
+            #print ('Interpolating time', i+1, 'of', nTimes)
             # Make 1d to do all pts for this time at once
             xvals = baselines[:,i,:,0] 
             ogShape = xvals.shape # [nPairs, nBase]
@@ -330,13 +333,12 @@ def calcFaraday(satData, paramData, gamRes, saveIt=None):
     lons, lats = np.meshgrid(myLons, myLats)
     myShape = lons.shape #[nLat, nLon]
     key2id = {}
-    for key in satData.keys():
-        i1 = np.where(myLons == lonlats[i,0])
-        i0 = np.where(myLats == lonlats[i,1])
+    for i in range(nKeys):
+        key = keys[i]
+        i1 = np.where(myLons == lonlats[i,0])[0]
+        i0 = np.where(myLats == lonlats[i,1])[0]
         key2id[key] = [i0, i1]
     
-    
-    #allRms[key] = [baseline, tidx] -> 
     allRes = np.zeros([9, myShape[0], myShape[1], nBase, nTimes]) # [nParams, lat, lon, baseline, t] params = RM, n1, bx1, by1, bz1, n2, bx2, by2, bz2
     allPairs = {}
     for key in satData.keys():
@@ -344,7 +346,6 @@ def calcFaraday(satData, paramData, gamRes, saveIt=None):
         mySat = satData[key]
         allParams = paramData[key]
         myLL = key2id[key]
-        
         sats = mySat['sats'] # [sat1, sat2, ...] where sat is [nTimes, 3] with xyz in stony AU
         ts = mySat['ts']
         dts = mySat['dts']
@@ -404,6 +405,7 @@ def calcFaraday(satData, paramData, gamRes, saveIt=None):
                 rm = (A / c**2) * intBds * sc_dist * rsun2m 
                 #srms[j,i] = rm
                 # Rot measure
+                
                 allRes[0, myLL[0], myLL[1], j, i] = rm
                 # N 
                 allRes[1, myLL[0], myLL[1], j, i] = myData[:,0][0]
@@ -419,7 +421,6 @@ def calcFaraday(satData, paramData, gamRes, saveIt=None):
                 allRes[8, myLL[0], myLL[1], j, i] = myData[:,3][-1]
                 
         allPairs[key] = pairs
-    
     if type(saveIt) != type(None):
         outStuff = {}
         outStuff['params'] = allRes
@@ -615,9 +616,296 @@ def RMmaps(rms, pairs):
     faxes[11].set_aspect('equal')
     faxes[11].set_title('Max Baseline')
     cbar2 = fig.colorbar(im2, ax=faxes[11], shrink=0.7)
-    plt.show()
+    #plt.show()
+    plt.savefig('RMmaps.png')
         
+def getMask(rmRes, plotIt=False, nMax=50, bLims=[10,30] ):
+    rms = rmRes['params']
+    
+    shape = rms.shape
+    nLat = shape[1]
+    nLon = shape[2]
+    nBase = shape[3]
+    nT = shape[4]
+    #for j in range(9):
+    #    print (j, np.max(rms[j,:,:,:]))
+    nidx = np.array([1,5])
+    mask = np.zeros([nLat,nLon])
+    maxNs = np.zeros([nLat,nLon])
+    maxBs = np.zeros([nLat,nLon])
+    for i in range(nLat):
+        for j in range(nLon):
+            myB1 = np.sqrt(rms[2,i,j,:, :]**2 + rms[3,i,j,:, :]**2 + rms[4,i,j,:, :]**2)
+            myB2 = np.sqrt(rms[6,i,j,:, :]**2 + rms[7,i,j,:, :]**2 + rms[8,i,j,:, :]**2)
+            maxN = np.max(rms[nidx,i,j,:, :])
+            maxB = np.max([myB1, myB2])
+            incIt = 0
+            if (maxB >= bLims[0]) and (maxB <= bLims[1]) and (maxN <=nMax):
+                incIt = 1
+            mask[i,j] = incIt
+            maxNs[i,j] = maxN
+            maxBs[i,j] = maxB
+            
+    
+    if plotIt:        
+        fig, axes = plt.subplots(3,1, sharex=True,sharey=True, figsize=(6,6))
+        im1 = axes[0].imshow(mask, vmin= 0.5, vmax=0.5, origin='lower', cmap='magma')
+        axes[0].contour(maxNs, levels=[50], colors = 'DodgerBlue', linewidths=2, linestyles='dashed')
+        axes[0].contour(maxBs, levels=[10,30], colors = 'DarkCyan', linewidths=2, linestyles='dashed')
+        ticks = [0.45, 0.55]
+        tickLabs = ['Exc','Inc']
+        cbar1 = plt.colorbar(im1, ticks = ticks)
+        cbar1.set_ticklabels(tickLabs)
+        cbar1.set_label('Mask')
+        im2 = axes[1].imshow(maxNs, origin='lower', cmap='magma')
+        axes[1].contour(maxNs, levels=[50], colors = 'DodgerBlue', linewidths=2, linestyles='dashed')
+        cbar2 = plt.colorbar(im2)
+        cbar2.set_label('Max n (cm$^{-3}$)')
+        im3 = axes[2].imshow(maxBs, origin='lower', cmap='magma')
+        axes[2].contour(maxBs, levels=[10,30], colors = 'DarkCyan', linewidths=2, linestyles='dashed')
+        cbar3 = plt.colorbar(im3)
+        cbar3.set_label('Max B (nT)')
+        plt.tight_layout()
+        #plt.show()
+        plt.savefig('GameraMask.png')
+    return mask
 
+def maskedHistos(rmRes, mask):
+    res = rmRes['params']
+    shape = res.shape
+    nLat = shape[1]
+    nLon = shape[2]
+    nBase = shape[3]
+    nT = shape[4]
+    
+    # Collect good profiles
+    goodRes = []
+    whereGood = []
+    for i in range(nLat):
+        for j in range(nLon):
+            if mask[i,j]:
+                whereGood.append([i,j])
+                goodRes.append(res[:,i,j,:,:])
+    goodRes = np.array(goodRes) # [profile, param, base, time]
+    gRshape = goodRes.shape
+    earlyVals = goodRes[:,:,:,:20]
+    medRMearly = np.median(goodRes[:,0,:,:])
+    cutoff = 1e-6# 5 * medRMearly # testing showed 5x good to isolate CME -> 4.9e-7
+    
+    
+    # Collect params from good profiles
+    allrms = []
+    allns = []
+    allbs = []
+    dupns = []
+    dupbs = []
+    maxrms = []
+    maxns = []
+    maxbs = []
+    matchns = []
+    matchbs = []
+    for i in range(gRshape[0]):
+        myRM = np.abs(goodRes[i,0,:,:])
+        myNs = np.concatenate((goodRes[i,1,:,:], goodRes[i,5,:,:]), axis=0)
+        b1 = np.sqrt(goodRes[i,2,:,:]**2 + goodRes[i,3,:,:]**2 + goodRes[i,4,:,:]**2)
+        b2 = np.sqrt(goodRes[i,6,:,:]**2 + goodRes[i,7,:,:]**2 + goodRes[i,8,:,:]**2)
+        myBs = np.concatenate((b1, b2), axis=0)
+        
+        isCME = np.where(np.abs(myRM[0,:]) > cutoff) # assume same for all baseline
+        myMaxRMs = np.max(myRM[:,isCME[0]], axis=1)
+        for j in range(nBase):
+            matchIdx = np.where(myRM[j,:] == myMaxRMs[j])[0][0]
+            matchn = 0.5*(goodRes[i,1,j,matchIdx] + goodRes[i,5,j,matchIdx])
+            matchb = 0.5*(b1[j,matchIdx] + b2[j,matchIdx])
+            matchns.append(matchn)
+            matchbs.append(matchb)
+        allrms.extend(myRM[:,isCME].flatten())
+        maxrms.extend(myMaxRMs.flatten())
+        
+        
+        
+        # Have plasma vals at both ends of the baseline -> need to take
+        # only the unique ones to avoid duplicates from same sat appearing
+        # in multiple baselines
+        meanN = 0.5 * (goodRes[i,1,:,:] + goodRes[i,5,:,:])
+        uniqNs = np.unique(myNs, axis=0)
+        myMaxNs = np.max(uniqNs[:,isCME[0]], axis=1)
+        mydupmaxn = np.max(meanN[:,isCME[0]], axis=1)
+        allns.extend(uniqNs[:,isCME].flatten())
+        maxns.extend(myMaxNs.flatten())
+        dupns.extend(meanN[:,isCME].flatten())
+        #dupmaxns.extend(mydupmaxn.flatten())
+        
+        meanBs = 0.5 * (b1 + b2)
+        uniqBs = np.unique(myBs, axis=0)
+        myMaxBs = np.max(uniqBs[:,isCME[0]], axis=1)
+        
+        
+        mydupmaxb = np.max(meanBs[:,isCME[0]], axis=1)
+        allbs.extend(uniqBs[:,isCME].flatten())
+        maxbs.extend(myMaxBs.flatten())
+        dupbs.extend(meanBs[:,isCME].flatten())
+        #dupmaxbs.extend(mydupmaxb.flatten())
+        
+    
+    # Will have twice the number of baselines as sats
+    # so num rm = 2 x num plasmas
+    allrms = np.array(allrms)
+    allns = np.array(allns)
+    allbs = np.array(allbs)
+    maxrms = np.array(maxrms)
+    maxns = np.array(maxns)
+    maxbs = np.array(maxbs)
+    
+    # Make some histos
+    if True:
+        fig, axes = plt.subplots(3,2, sharex = 'row')
+        axes[0,0].hist(np.log10(allrms), range=(-6,-4))
+        axes[1,0].hist(allns)
+        axes[2,0].hist(allbs)
+        axes[0,1].hist(np.log10(maxrms), range=(-6,-4))
+        axes[1,1].hist(maxns)
+        axes[2,1].hist(maxbs)
+    
+        for i in range(2):
+            axes[0,i].set_xlabel('log$_{10}$ RM (rad/m$^2$)')
+            axes[1,i].set_xlabel('n (cm$^{-3}$)')
+            axes[2,i].set_xlabel('B (nT)')
+            for j in range(3):
+                axes[j,i].set_ylabel('Counts')
+        axes[0,0].set_title('Full Time Profile')
+        axes[0,1].set_title('Max of Time Profile')
+    
+        plt.tight_layout()
+        plt.savefig('GameraHistos.png')
+    
+    # Make a scatter plot    
+    if False:
+        fig, axes = plt.subplots(1,2, sharex=True, sharey=True)
+        axes[0].scatter(dupns, dupbs, c=np.log10(allrms), s=10, vmin=-6, vmax=-4, cmap='plasma')
+        im = axes[1].scatter(matchns, matchbs, c=np.log10(maxrms), s=10, vmin=-6, vmax=-4, cmap='plasma')
+        divider = make_axes_locatable(axes[1])
+        cax = divider.append_axes("right", size="7%", pad=0.2)
+        cbar = plt.colorbar(im, cax=cax)
+        cbar.set_label('log$_{10}$ RM (rad/m$^2$)')
+        for i in range(2):
+            axes[i].set_xlabel('n (cm$^{-3}$)')
+            axes[i].set_ylabel('B (nT)')
+        axes[0].set_title('Full Time Profile')
+        axes[1].set_title('Max of Time Profile')
+        plt.tight_layout()
+        #plt.show()
+        plt.savefig('GameraScatter.png')
+
+def plotLLProfileSpread(rmRes, mask, mode='lon'):
+    res = rmRes['params']
+    shape = res.shape
+    nLat = shape[1]
+    nLon = shape[2]
+    nBase = shape[3]
+    nT = shape[4]
+    ts = np.array(range(nT))
+     
+    cutoff = 1e-6 # ~ 10x med of early rm, from maskedHistos
+    fig, axes = plt.subplots(5,2, sharex=True, sharey=True)
+    axf = axes.flatten()
+    
+    if mode.lower() == 'lon':
+        nNorm = nLon
+        figName = 'GameraProfilesLon.png'
+        labelTag = 'Longitude'
+    elif mode.lower() == 'lat':
+        nNorm = nLat
+        figName = 'GameraProfilesLat.png'
+        labelTag = 'Latitude'
+    
+    cmap = plt.colormaps['plasma'] 
+    lw = 0.5
+    if mode.lower() == 'lon':
+        for i in range(nLat):
+            for j in range(nLon):
+                if mask[i,j]:
+                    for k in range(nBase):
+                        myRM = res[0,i,j,k,:]
+                        isCME = np.where(np.abs(myRM) >=cutoff)[0]
+                        axf[k].plot(np.log10(np.abs(res[0,i,j,k,isCME])), c=cmap(j/nNorm))
+    else:
+        for j in range(nLon):
+            for i in range(nLat):
+                if mask[i,j]:
+                    for k in range(nBase):
+                        myRM = res[0,i,j,k,:]
+                        isCME = np.where(np.abs(myRM) >=cutoff)[0]
+                        axf[k].plot(np.log10(np.abs(res[0,i,j,k,isCME])), c=cmap(i/nNorm), lw=lw)
+    for i in [-2,-1]:
+        axf[i].set_xlabel('Time (hr)')
+    for j in [0,2,4,6,8]:
+        axf[j].set_ylabel('log$_{10}$ RM\n(rad/m$^2$)')
+    for ax in axf:
+        ax.set_yticks([-6,-5,-4])
+                    
+    norm = colors.Normalize(vmin=-(nNorm-1)/2, vmax=(nNorm-1)/2)
+    mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
+    fig.subplots_adjust(right=0.8, wspace=0.05, top=0.95)
+    cbar_ax = fig.add_axes([0.83, 0.2, 0.05, 0.6])
+    cbar = fig.colorbar(mappable, cax=cbar_ax)
+    cbar.set_label(labelTag + '($^{\\circ}$)')
+    #plt.tight_layout()
+    #lt.show()
+    plt.savefig(figName)
+
+def plotAvgProf(rmRes,mask):
+    res = rmRes['params']
+    shape = res.shape
+    nLat = shape[1]
+    nLon = shape[2]
+    nBase = shape[3]
+    nT = shape[4]
+    ts = np.array(range(nT))
+     
+    cutoff = 1e-6 # ~ 10x med of early rm, from maskedHistos  
+    
+    # Collect profiles into single 2d array with start aligned
+    # pad back end with -9999
+    nGood = int(np.sum(mask))
+    subnT = 20
+    allProfiles = np.zeros([nGood,nBase, subnT]) -9999# assume nobody has CME dur > 20
+    allLens = []
+    counter = 0
+    for i in range(nLat):
+        for j in range(nLon):
+            if mask[i,j]: 
+                for k in range(nBase):
+                    myRM = np.abs(res[0,i,j,k,:])
+                    isCME = np.where(np.abs(myRM) > cutoff)[0] 
+                    allLens.append(len(isCME))
+                    allProfiles[counter,k,:allLens[-1]] = myRM[isCME]
+                counter +=1
+    
+    meanVals = np.zeros([nBase, subnT]) -9999
+    stdVals = np.zeros([nBase, subnT]) -9999
+    for i in range(nBase):
+        for j in range(subnT):
+            theseVals = allProfiles[:,i,j]
+            isCME = np.where(theseVals != -9999)[0]
+            if len(isCME) !=0:
+                meanVals[i,j] = np.mean(np.abs(theseVals[isCME]))
+                stdVals[i,j] = np.std(np.abs(theseVals[isCME]))
+                
+    cmap = plt.colormaps['plasma']
+    fig, ax = plt.subplots(1,1)
+    for i in range(nBase):
+        mymeans = meanVals[i,:]
+        mystds = stdVals[i,:]
+        goodMeans = np.where(mymeans != -9999)[0]
+        #plt.plot(mymeans[goodMeans], c=cmap(i/nBase))
+        #plt.fill_between(range(len(goodMeans)),mymeans[goodMeans]-mystds[goodMeans],mymeans[goodMeans]+mystds[goodMeans],alpha=0.25, color=cmap(i/nBase))
+        plt.plot(np.log10(mymeans[goodMeans]), c=cmap(i/nBase))
+        plt.fill_between(range(len(goodMeans)),np.log10(mymeans[goodMeans]-mystds[goodMeans]),np.log10(mymeans[goodMeans]+mystds[goodMeans]),alpha=0.15, color=cmap(i/nBase))
+    ax.set_ylabel('log$_{10}$ RM\n(rad/m$^2$)')
+    ax.set_xlabel('Time (hr)')
+    plt.tight_layout()
+    plt.savefig('GameraMeanBaselines.png')
 if False:
     sat1 = miniSats[0]
     sat2 = miniSats[1]
@@ -660,12 +948,25 @@ if False:
 #getGamParams(pathFile, gamFile, paramPickle)
 
 # Calculate RM
-with open(pathFile, 'rb') as file:
-    satData = pickle.load(file)
-with open(paramPickle, 'rb') as file:
-    paramData = pickle.load(file)
-gamRes = GAMERAres(gamFile)
-#allRMs, allPairs = calcFaraday(satData, paramData, gamRes, saveIt=RMfile)
+if False:
+    with open(pathFile, 'rb') as file:
+        satData = pickle.load(file)
+    with open(paramPickle, 'rb') as file:
+        paramData = pickle.load(file)
+    gamRes = GAMERAres(gamFile)
+    print ('Done loading')
+    allRMs, allPairs = calcFaraday(satData, paramData, gamRes, saveIt=RMfile)
+
+with open(RMfile, 'rb') as file:
+    RMres = pickle.load(file)
+mask = getMask(RMres, plotIt=False)
+
+#maskedHistos(RMres, mask)
+
+plotLLProfileSpread(RMres,mask, mode='lon')
+
+#plotAvgProf(RMres,mask)
+
 
 # |-----------------|
 # |--- Plot data ---|
@@ -692,6 +993,4 @@ if False:
         figName = 'RM_t400_'+key+'.png'
         plotFaraday( myRM, myPairs, time=gamDTs, figName=figName)
 
-# |--- 2D max/range RM maps ---|
-#RMmaps(allRMs, allPairs)    
 
